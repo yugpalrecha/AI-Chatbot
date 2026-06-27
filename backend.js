@@ -606,7 +606,16 @@ app.get("/rag-status", (_req, res) =>
 app.get("/health", (_req, res) =>
   res.json({ status: "ok", time: new Date().toISOString() })
 );
+app.post("/clear-pdf", (_req, res) => {
+    rag.store = null;
+    rag.ready = false;
+    rag.filename = null;
 
+    res.json({
+        success: true,
+        message: "PDF removed successfully"
+    });
+});
 /* ─────────────────────────────────────────────
    START SERVER
 ───────────────────────────────────────────── */

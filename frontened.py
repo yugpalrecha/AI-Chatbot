@@ -78,11 +78,17 @@ with st.sidebar:
     st.subheader("📄 Upload PDF for Q&A")
 
     rag_status = get_rag_status()
-    if rag_status.get("ready"):
-        st.success(f"✅ Active: **{rag_status['filename']}**")
-    else:
-        st.info("No PDF loaded yet.")
 
+if rag_status.get("ready"):
+    st.success(f"✅ Active: **{rag_status['filename']}**")
+
+    if st.button("🗑 Remove PDF", use_container_width=True):
+        requests.post(f"{BACKEND_URL}/clear-pdf")
+        st.rerun()
+
+else:
+    st.info("No PDF loaded yet.")
+    
     uploaded_file = st.file_uploader(
         "Choose a PDF file", type=["pdf"], label_visibility="collapsed"
     )
