@@ -14,13 +14,6 @@ import { tool } from "@langchain/core/tools";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 
 /* ─────────────────────────────────────────────
-   ENV REQUIRED:
-   GROQ_API_KEY=...
-   TAVILY_API_KEY=...   <-- get free key at https://tavily.com (1000 req/month free)
-   ALPHA_VANTAGE_KEY=... (optional, stock fallback)
-───────────────────────────────────────────── */
-
-/* ─────────────────────────────────────────────
    EXPRESS SETUP
 ───────────────────────────────────────────── */
 const app = express();
@@ -119,6 +112,7 @@ async function processPDF(filePath, name) {
    COMPANY NAME → TICKER MAP
 ───────────────────────────────────────────── */
 const COMPANY_TO_TICKER = {
+  // Tech
   "tesla": "TSLA", "apple": "AAPL", "microsoft": "MSFT",
   "google": "GOOGL", "alphabet": "GOOGL", "amazon": "AMZN",
   "meta": "META", "facebook": "META", "netflix": "NFLX",
@@ -131,33 +125,41 @@ const COMPANY_TO_TICKER = {
   "airbnb": "ABNB", "spotify": "SPOT",
   "snap": "SNAP", "pinterest": "PINS", "reddit": "RDDT",
   "amat": "AMAT",
+  // Finance
   "jpmorgan": "JPM", "jp morgan": "JPM", "goldman sachs": "GS",
   "morgan stanley": "MS", "bank of america": "BAC",
   "wells fargo": "WFC", "citigroup": "C", "visa": "V",
   "mastercard": "MA", "paypal": "PYPL", "coinbase": "COIN",
   "blackrock": "BLK", "berkshire": "BRK-B",
+  // EV / Auto
   "rivian": "RIVN", "lucid": "LCID", "ford": "F",
   "general motors": "GM", "toyota": "TM", "ferrari": "RACE",
   "volkswagen": "VWAGY", "bmw": "BMWYY",
+  // Retail / Consumer
   "walmart": "WMT", "target": "TGT", "costco": "COST",
   "nike": "NKE", "starbucks": "SBUX", "mcdonalds": "MCD",
   "coca cola": "KO", "cocacola": "KO", "pepsi": "PEP",
   "pepsico": "PEP", "disney": "DIS",
+  // Healthcare / Pharma
   "pfizer": "PFE", "moderna": "MRNA", "johnson": "JNJ",
   "abbvie": "ABBV", "eli lilly": "LLY", "lilly": "LLY",
   "unitedhealth": "UNH", "cvs": "CVS", "merck": "MRK",
+  // Energy
   "exxon": "XOM", "exxonmobil": "XOM", "chevron": "CVX",
   "bp": "BP", "shell": "SHEL", "aramco": "2222.SR",
   "conocophillips": "COP",
+  // Semiconductors
   "micron": "MU", "arm": "ARM", "asml": "ASML",
   "lam research": "LRCX", "kla": "KLAC", "marvell": "MRVL",
   "skyworks": "SWKS", "analog devices": "ADI", "texas instruments": "TXN",
+  // Cloud / SaaS
   "palantir": "PLTR", "snowflake": "SNOW", "shopify": "SHOP",
   "square": "SQ", "block": "SQ", "twilio": "TWLO",
   "datadog": "DDOG", "cloudflare": "NET", "crowdstrike": "CRWD",
   "palo alto": "PANW", "fortinet": "FTNT", "okta": "OKTA",
   "hubspot": "HUBS", "workday": "WDAY", "servicenow": "NOW",
   "mongodb": "MDB", "elastic": "ESTC", "confluent": "CFLT",
+  // Others
   "spacex": "SPACEX", "astrazeneca": "AZN", "novartis": "NVS",
   "roche": "RHHBY", "siemens": "SIEGY", "sap": "SAP",
   "alibaba": "BABA", "baidu": "BIDU", "jd.com": "JD",
@@ -243,9 +245,7 @@ function detectIntent(message) {
   const lower = message.toLowerCase();
 
   if (rag.ready && PDF_KEYWORDS.some((kw) => lower.includes(kw))) return "rag";
-
   if (MATH_PATTERN.test(message)) return "math";
-
   if (DATE_TIME_PATTERN.test(lower)) return "datetime";
 
   const isNewsQuery = NEWS_KEYWORDS.some((kw) => lower.includes(kw));
@@ -259,142 +259,252 @@ function detectIntent(message) {
 }
 
 /* ─────────────────────────────────────────────
-   PRIMARY WEB SEARCH — Tavily API
+   WEB SEARCH — Multi-source with fallbacks
 ───────────────────────────────────────────── */
-async function tavilySearch(query) {
-  if (!process.env.TAVILY_API_KEY) {
-    throw new Error("TAVILY_API_KEY not set");
+
+// Source 1: DuckDuckGo Instant Answer API (no scraping)
+async function searchDDGInstant(query) {
+  try {
+    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1&t=chatbot`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; ChatBot/1.0)",
+        "Accept": "application/json",
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!res.ok) return "";
+    const data = await res.json();
+    let output = "";
+
+    if (data.Answer) {
+      output += `✅ Answer: ${data.Answer}\n\n`;
+    }
+    if (data.AbstractText) {
+      output += `📌 ${data.AbstractText}\n`;
+      if (data.AbstractURL) output += `Source: ${data.AbstractURL}\n`;
+      output += "\n";
+    }
+    if (data.Definition) {
+      output += `📖 Definition: ${data.Definition}\n`;
+      if (data.DefinitionURL) output += `Source: ${data.DefinitionURL}\n`;
+      output += "\n";
+    }
+    if (data.RelatedTopics?.length) {
+      const topics = data.RelatedTopics
+        .filter((t) => t.Text)
+        .slice(0, 5)
+        .map((t, i) => `[${i + 1}] ${t.Text}${t.FirstURL ? `\n    🔗 ${t.FirstURL}` : ""}`)
+        .join("\n");
+      if (topics) output += `🔗 Related:\n${topics}\n`;
+    }
+
+    return output.trim();
+  } catch (err) {
+    console.warn("⚠️ DDG Instant failed:", err.message);
+    return "";
   }
+}
 
-  const res = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      api_key: process.env.TAVILY_API_KEY,
-      query,
-      search_depth: "basic",
-      include_answer: true,
-      max_results: 6,
-    }),
-  });
+// Source 2: Wikipedia Search API
+async function searchWikipedia(query) {
+  try {
+    const searchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=3&origin=*`;
+    const searchRes = await fetch(searchUrl, {
+      headers: { "User-Agent": "ChatBot/1.0 (educational project)" },
+      signal: AbortSignal.timeout(5000),
+    });
 
-  if (!res.ok) {
-    throw new Error(`Tavily API error: ${res.status} ${res.statusText}`);
+    if (!searchRes.ok) return "";
+    const searchData = await searchRes.json();
+    const results = searchData?.query?.search || [];
+    if (!results.length) return "";
+
+    // Get extract for top result
+    const topTitle = results[0].title;
+    const extractUrl = `https://en.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&titles=${encodeURIComponent(topTitle)}&format=json&origin=*`;
+    const extractRes = await fetch(extractUrl, {
+      headers: { "User-Agent": "ChatBot/1.0 (educational project)" },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    let output = "";
+    if (extractRes.ok) {
+      const extractData = await extractRes.json();
+      const pages = extractData?.query?.pages || {};
+      const page = Object.values(pages)[0];
+      if (page?.extract) {
+        const shortExtract = page.extract.slice(0, 800).trim();
+        output += `📚 Wikipedia — ${topTitle}:\n${shortExtract}\n🔗 https://en.wikipedia.org/wiki/${encodeURIComponent(topTitle)}\n\n`;
+      }
+    }
+
+    // Add other search results as references
+    if (results.length > 1) {
+      output += "🔍 Also relevant:\n";
+      results.slice(1).forEach((r, i) => {
+        const snippet = r.snippet.replace(/<[^>]+>/g, "").slice(0, 150);
+        output += `[${i + 2}] ${r.title}: ${snippet}...\n    🔗 https://en.wikipedia.org/wiki/${encodeURIComponent(r.title)}\n`;
+      });
+    }
+
+    return output.trim();
+  } catch (err) {
+    console.warn("⚠️ Wikipedia search failed:", err.message);
+    return "";
   }
+}
 
-  const data = await res.json();
-  let output = "";
+// Source 3: NewsAPI (requires free API key — set NEWS_API_KEY in .env)
+async function searchNewsAPI(query) {
+  if (!process.env.NEWS_API_KEY) return "";
+  try {
+    const url = `https://newsapi.org/v2/everything?q=${encodeURIComponent(query)}&sortBy=publishedAt&pageSize=5&language=en&apiKey=${process.env.NEWS_API_KEY}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return "";
+    const data = await res.json();
+    if (!data.articles?.length) return "";
 
-  if (data.answer) {
-    output += `📌 Summary: ${data.answer}\n\n`;
+    let output = "📰 Latest News:\n\n";
+    data.articles.slice(0, 5).forEach((article, i) => {
+      output += `[${i + 1}] ${article.title}\n`;
+      if (article.description) output += `    ${article.description.slice(0, 150)}\n`;
+      output += `    📅 ${new Date(article.publishedAt).toLocaleDateString()}\n`;
+      output += `    🔗 ${article.url}\n\n`;
+    });
+    return output.trim();
+  } catch (err) {
+    console.warn("⚠️ NewsAPI failed:", err.message);
+    return "";
   }
+}
 
-  if (data.results?.length) {
-    output += "🔍 Search Results:\n\n";
-    data.results.forEach((r, i) => {
+// Source 4: GNews API (requires free API key — set GNEWS_API_KEY in .env)
+async function searchGNews(query) {
+  if (!process.env.GNEWS_API_KEY) return "";
+  try {
+    const url = `https://gnews.io/api/v4/search?q=${encodeURIComponent(query)}&lang=en&max=5&apikey=${process.env.GNEWS_API_KEY}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return "";
+    const data = await res.json();
+    if (!data.articles?.length) return "";
+
+    let output = "📰 GNews Results:\n\n";
+    data.articles.slice(0, 5).forEach((article, i) => {
+      output += `[${i + 1}] ${article.title}\n`;
+      if (article.description) output += `    ${article.description.slice(0, 150)}\n`;
+      output += `    📅 ${new Date(article.publishedAt).toLocaleDateString()}\n`;
+      output += `    🔗 ${article.url}\n\n`;
+    });
+    return output.trim();
+  } catch (err) {
+    console.warn("⚠️ GNews failed:", err.message);
+    return "";
+  }
+}
+
+// Source 5: Brave Search API (requires free API key — set BRAVE_SEARCH_KEY in .env)
+async function searchBrave(query) {
+  if (!process.env.BRAVE_SEARCH_KEY) return "";
+  try {
+    const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`;
+    const res = await fetch(url, {
+      headers: {
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+        "X-Subscription-Token": process.env.BRAVE_SEARCH_KEY,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return "";
+    const data = await res.json();
+    const webResults = data?.web?.results || [];
+    if (!webResults.length) return "";
+
+    let output = "🔍 Brave Search Results:\n\n";
+    webResults.slice(0, 5).forEach((r, i) => {
       output += `[${i + 1}] ${r.title}\n`;
-      output += `    ${(r.content || "").slice(0, 400)}\n`;
+      if (r.description) output += `    ${r.description.slice(0, 200)}\n`;
       output += `    🔗 ${r.url}\n\n`;
     });
+    return output.trim();
+  } catch (err) {
+    console.warn("⚠️ Brave Search failed:", err.message);
+    return "";
   }
+}
 
-  if (!output.trim()) {
-    throw new Error("Tavily returned no results");
+// Source 6: Serper.dev (Google Search proxy — set SERPER_API_KEY in .env)
+async function searchSerper(query) {
+  if (!process.env.SERPER_API_KEY) return "";
+  try {
+    const res = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": process.env.SERPER_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ q: query, num: 5 }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return "";
+    const data = await res.json();
+
+    let output = "";
+    if (data.answerBox?.answer) {
+      output += `✅ Direct Answer: ${data.answerBox.answer}\n\n`;
+    }
+    if (data.answerBox?.snippet) {
+      output += `📌 Featured: ${data.answerBox.snippet}\n\n`;
+    }
+    if (data.organic?.length) {
+      output += "🔍 Google Search Results:\n\n";
+      data.organic.slice(0, 5).forEach((r, i) => {
+        output += `[${i + 1}] ${r.title}\n`;
+        if (r.snippet) output += `    ${r.snippet.slice(0, 200)}\n`;
+        output += `    🔗 ${r.link}\n\n`;
+      });
+    }
+    if (data.news?.length) {
+      output += "📰 News:\n\n";
+      data.news.slice(0, 3).forEach((r, i) => {
+        output += `[${i + 1}] ${r.title}\n`;
+        if (r.snippet) output += `    ${r.snippet.slice(0, 150)}\n`;
+        output += `    🔗 ${r.link}\n\n`;
+      });
+    }
+    return output.trim();
+  } catch (err) {
+    console.warn("⚠️ Serper failed:", err.message);
+    return "";
   }
-
-  return output.trim();
 }
 
 /* ─────────────────────────────────────────────
-   FALLBACK WEB SEARCH — DuckDuckGo (used only if Tavily fails)
+   MAIN SEARCH FUNCTION — tries all sources
 ───────────────────────────────────────────── */
-async function duckduckgoSearchFallback(query) {
-  const headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-  };
+async function performWebSearch(query) {
+  console.log(`🔍 Searching: "${query}"`);
 
-  let output = "";
+  // Run all available sources in parallel
+  const [serper, brave, newsapi, gnews, ddg, wiki] = await Promise.all([
+    searchSerper(query),
+    searchBrave(query),
+    searchNewsAPI(query),
+    searchGNews(query),
+    searchDDGInstant(query),
+    searchWikipedia(query),
+  ]);
 
-  try {
-    const iaRes = await fetch(
-      `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
-      { headers }
-    );
-    if (iaRes.ok) {
-      const ia = await iaRes.json();
-      if (ia.AbstractText) {
-        output += `📌 Summary: ${ia.AbstractText}\n`;
-        if (ia.AbstractURL) output += `Source: ${ia.AbstractURL}\n`;
-        output += "\n";
-      }
-      if (ia.Answer) output += `✅ Direct Answer: ${ia.Answer}\n\n`;
-      if (ia.RelatedTopics?.length) {
-        const topics = ia.RelatedTopics
-          .filter((t) => t.Text).slice(0, 4)
-          .map((t, i) => `[${i + 1}] ${t.Text}${t.FirstURL ? `\n    ${t.FirstURL}` : ""}`)
-          .join("\n");
-        if (topics) output += `Related:\n${topics}\n\n`;
-      }
-    }
-  } catch (err) {
-    console.warn("⚠️ DDG Instant Answer failed:", err.message);
+  // Combine results (priority: Serper > Brave > News > DDG > Wiki)
+  const parts = [serper, brave, newsapi, gnews, ddg, wiki].filter(Boolean);
+
+  if (!parts.length) {
+    return `No search results found for "${query}". The assistant will answer from its training knowledge.`;
   }
 
-  try {
-    const htmlRes = await fetch(
-      `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
-      { headers }
-    );
-    if (htmlRes.ok) {
-      const html = await htmlRes.text();
-      const stripTags = (s) =>
-        s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&nbsp;/g, " ")
-          .replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, " ").trim();
-
-      const titles = [], snippets = [], urls = [];
-      let m;
-      const titleRegex   = /<a[^>]+class="result__a"[^>]*>([\s\S]*?)<\/a>/gi;
-      const snippetRegex = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
-      const urlRegex     = /<a[^>]+class="result__url"[^>]*>([\s\S]*?)<\/a>/gi;
-
-      while ((m = titleRegex.exec(html))   !== null) titles.push(stripTags(m[1]));
-      while ((m = snippetRegex.exec(html)) !== null) snippets.push(stripTags(m[1]));
-      while ((m = urlRegex.exec(html))     !== null) urls.push(stripTags(m[1]));
-
-      const count = Math.min(titles.length, snippets.length, 6);
-      if (count > 0) {
-        output += "🔍 Search Results:\n\n";
-        for (let i = 0; i < count; i++) {
-          output += `[${i + 1}] ${titles[i] || "Result"}\n`;
-          output += `    ${snippets[i]}\n`;
-          if (urls[i]) output += `    🔗 ${urls[i]}\n`;
-          output += "\n";
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("⚠️ DDG HTML scrape failed:", err.message);
-  }
-
-  if (!output.trim()) return `No search results found for: "${query}". Try rephrasing.`;
-  return output.trim();
-}
-
-/* ─────────────────────────────────────────────
-   WEB SEARCH WRAPPER — tries Tavily first, falls back to DDG
-───────────────────────────────────────────── */
-async function webSearch(query) {
-  try {
-    console.log(`🔎 Trying Tavily for: "${query}"`);
-    const result = await tavilySearch(query);
-    console.log(`✅ Tavily succeeded`);
-    return result;
-  } catch (err) {
-    console.warn(`⚠️ Tavily failed (${err.message}), falling back to DuckDuckGo`);
-    return await duckduckgoSearchFallback(query);
-  }
+  return parts.join("\n\n---\n\n");
 }
 
 /* ─────────────────────────────────────────────
@@ -535,7 +645,7 @@ app.post("/chat", async (req, res) => {
     let toolResult = "";
 
     if (intent === "web_search") {
-      toolResult = await webSearch(message);
+      toolResult = await performWebSearch(message);
 
     } else if (intent === "rag") {
       if (!rag.ready) {
@@ -650,22 +760,18 @@ app.get("/rag-status", (_req, res) =>
 app.get("/health", (_req, res) =>
   res.json({ status: "ok", time: new Date().toISOString() })
 );
-app.post("/clear-pdf", (_req, res) => {
-    rag.store = null;
-    rag.ready = false;
-    rag.filename = null;
 
-    res.json({
-        success: true,
-        message: "PDF removed successfully"
-    });
+app.post("/clear-pdf", (_req, res) => {
+  rag.store = null;
+  rag.ready = false;
+  rag.filename = null;
+  res.json({ success: true, message: "PDF removed successfully" });
 });
 
 /* ─────────────────────────────────────────────
    START SERVER
 ───────────────────────────────────────────── */
 const PORT = process.env.PORT || 5000;
-
 app.listen(PORT, () => {
-    console.log(`Server running on ${PORT}`);
+  console.log(`✅ Server running on port ${PORT}`);
 });
