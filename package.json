@@ -1,0 +1,24 @@
+{
+  "name": "ai-chatbot",
+  "type": "module",
+  "scripts": {
+    "start": "node backend.js"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.x",
+    "@langchain/groq": "^0.x",
+    "@langchain/textsplitters": "^0.x",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "pdfjs-dist": "^4.x",
+    "zod": "^3.x"
+  },
+  "version": "1.0.0",
+  "main": "backened.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": ""
+}
