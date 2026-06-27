@@ -1,10 +1,7 @@
 import streamlit as st
 import requests
 import uuid
-from dotenv import load_dotenv
 import os
-
-load_dotenv()
 
 BACKEND_URL = os.getenv("BACKEND_URL")
 
