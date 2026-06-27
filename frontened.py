@@ -79,21 +79,22 @@ with st.sidebar:
 
     rag_status = get_rag_status()
 
-if rag_status.get("ready"):
-    st.success(f"✅ Active: **{rag_status['filename']}**")
+    if rag_status.get("ready"):
+        st.success(f"✅ Active: **{rag_status['filename']}**")
 
-    if st.button("❌ Cancel PDF", use_container_width=True):
-        try:
-            requests.post(f"{BACKEND_URL}/clear-pdf", timeout=5)
-            st.rerun()
-        except Exception as e:
-            st.error(f"Error: {e}")
+        if st.button("❌ Cancel PDF", use_container_width=True):
+            try:
+                requests.post(f"{BACKEND_URL}/clear-pdf", timeout=5)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error: {e}")
+    else:
+        st.info("No PDF loaded yet.")
 
-else:
-    st.info("No PDF loaded yet.")
-    
     uploaded_file = st.file_uploader(
-        "Choose a PDF file", type=["pdf"], label_visibility="collapsed"
+        "Choose a PDF file",
+        type=["pdf"],
+        label_visibility="collapsed"
     )
 
     if uploaded_file is not None:
@@ -106,12 +107,21 @@ else:
                         timeout=60,
                     )
                     data = response.json()
+
                     if response.ok:
-                        st.session_state.upload_msg = ("success", data.get("message", "PDF uploaded!"))
+                        st.session_state.upload_msg = (
+                            "success",
+                            data.get("message", "PDF uploaded!")
+                        )
                     else:
-                        st.session_state.upload_msg = ("error", data.get("error", "Upload failed"))
+                        st.session_state.upload_msg = (
+                            "error",
+                            data.get("error", "Upload failed")
+                        )
+
                 except Exception as e:
                     st.session_state.upload_msg = ("error", str(e))
+
             st.rerun()
 
     if st.session_state.upload_msg:
@@ -135,6 +145,7 @@ else:
         label = f"🗨 Chat {tid[:8]}..."
         is_active = tid == st.session_state.thread_id
         btn_type = "primary" if is_active else "secondary"
+
         if st.button(label, key=f"btn_{tid}", use_container_width=True, type=btn_type):
             st.session_state.thread_id = tid
             st.query_params["thread_id"] = tid
