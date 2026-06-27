@@ -14,6 +14,13 @@ import { tool } from "@langchain/core/tools";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 
 /* ─────────────────────────────────────────────
+   ENV REQUIRED:
+   GROQ_API_KEY=...
+   TAVILY_API_KEY=...   <-- get free key at https://tavily.com (1000 req/month free)
+   ALPHA_VANTAGE_KEY=... (optional, stock fallback)
+───────────────────────────────────────────── */
+
+/* ─────────────────────────────────────────────
    EXPRESS SETUP
 ───────────────────────────────────────────── */
 const app = express();
@@ -112,7 +119,6 @@ async function processPDF(filePath, name) {
    COMPANY NAME → TICKER MAP
 ───────────────────────────────────────────── */
 const COMPANY_TO_TICKER = {
-  // Tech
   "tesla": "TSLA", "apple": "AAPL", "microsoft": "MSFT",
   "google": "GOOGL", "alphabet": "GOOGL", "amazon": "AMZN",
   "meta": "META", "facebook": "META", "netflix": "NFLX",
@@ -125,41 +131,33 @@ const COMPANY_TO_TICKER = {
   "airbnb": "ABNB", "spotify": "SPOT",
   "snap": "SNAP", "pinterest": "PINS", "reddit": "RDDT",
   "amat": "AMAT",
-  // Finance
   "jpmorgan": "JPM", "jp morgan": "JPM", "goldman sachs": "GS",
   "morgan stanley": "MS", "bank of america": "BAC",
   "wells fargo": "WFC", "citigroup": "C", "visa": "V",
   "mastercard": "MA", "paypal": "PYPL", "coinbase": "COIN",
   "blackrock": "BLK", "berkshire": "BRK-B",
-  // EV / Auto
   "rivian": "RIVN", "lucid": "LCID", "ford": "F",
   "general motors": "GM", "toyota": "TM", "ferrari": "RACE",
   "volkswagen": "VWAGY", "bmw": "BMWYY",
-  // Retail / Consumer
   "walmart": "WMT", "target": "TGT", "costco": "COST",
   "nike": "NKE", "starbucks": "SBUX", "mcdonalds": "MCD",
   "coca cola": "KO", "cocacola": "KO", "pepsi": "PEP",
   "pepsico": "PEP", "disney": "DIS",
-  // Healthcare / Pharma
   "pfizer": "PFE", "moderna": "MRNA", "johnson": "JNJ",
   "abbvie": "ABBV", "eli lilly": "LLY", "lilly": "LLY",
   "unitedhealth": "UNH", "cvs": "CVS", "merck": "MRK",
-  // Energy
   "exxon": "XOM", "exxonmobil": "XOM", "chevron": "CVX",
   "bp": "BP", "shell": "SHEL", "aramco": "2222.SR",
   "conocophillips": "COP",
-  // Semiconductors
   "micron": "MU", "arm": "ARM", "asml": "ASML",
   "lam research": "LRCX", "kla": "KLAC", "marvell": "MRVL",
   "skyworks": "SWKS", "analog devices": "ADI", "texas instruments": "TXN",
-  // Cloud / SaaS
   "palantir": "PLTR", "snowflake": "SNOW", "shopify": "SHOP",
   "square": "SQ", "block": "SQ", "twilio": "TWLO",
   "datadog": "DDOG", "cloudflare": "NET", "crowdstrike": "CRWD",
   "palo alto": "PANW", "fortinet": "FTNT", "okta": "OKTA",
   "hubspot": "HUBS", "workday": "WDAY", "servicenow": "NOW",
   "mongodb": "MDB", "elastic": "ESTC", "confluent": "CFLT",
-  // Others
   "spacex": "SPACEX", "astrazeneca": "AZN", "novartis": "NVS",
   "roche": "RHHBY", "siemens": "SIEGY", "sap": "SAP",
   "alibaba": "BABA", "baidu": "BIDU", "jd.com": "JD",
@@ -216,7 +214,6 @@ const PDF_KEYWORDS = [
 function extractTicker(query) {
   const lower = query.toLowerCase();
 
-  // 1. Company name match (longest first)
   const sortedNames = Object.keys(COMPANY_TO_TICKER)
     .sort((a, b) => b.length - a.length);
   for (const name of sortedNames) {
@@ -226,7 +223,6 @@ function extractTicker(query) {
     }
   }
 
-  // 2. Raw ticker symbol (2-5 uppercase letters)
   const tickerMatches = query.toUpperCase().match(/\b([A-Z]{2,5})\b/g);
   if (tickerMatches) {
     for (const candidate of tickerMatches) {
@@ -246,32 +242,73 @@ function extractTicker(query) {
 function detectIntent(message) {
   const lower = message.toLowerCase();
 
-  // 1. PDF
   if (rag.ready && PDF_KEYWORDS.some((kw) => lower.includes(kw))) return "rag";
 
-  // 2. Math
   if (MATH_PATTERN.test(message)) return "math";
 
-  // 3. Date / time
   if (DATE_TIME_PATTERN.test(lower)) return "datetime";
 
-  // 4. News / general — force web_search BEFORE stock check
   const isNewsQuery = NEWS_KEYWORDS.some((kw) => lower.includes(kw));
   if (isNewsQuery && !STOCK_TRIGGER.test(message)) return "web_search";
 
-  // 5. Stock
   const ticker = extractTicker(message);
   if (ticker) return "stock";
   if (STOCK_TRIGGER.test(message)) return "stock";
 
-  // 6. Default
   return "web_search";
 }
 
 /* ─────────────────────────────────────────────
-   FREE WEB SEARCH — DuckDuckGo
+   PRIMARY WEB SEARCH — Tavily API
 ───────────────────────────────────────────── */
-async function duckduckgoSearch(query) {
+async function tavilySearch(query) {
+  if (!process.env.TAVILY_API_KEY) {
+    throw new Error("TAVILY_API_KEY not set");
+  }
+
+  const res = await fetch("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: process.env.TAVILY_API_KEY,
+      query,
+      search_depth: "basic",
+      include_answer: true,
+      max_results: 6,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`Tavily API error: ${res.status} ${res.statusText}`);
+  }
+
+  const data = await res.json();
+  let output = "";
+
+  if (data.answer) {
+    output += `📌 Summary: ${data.answer}\n\n`;
+  }
+
+  if (data.results?.length) {
+    output += "🔍 Search Results:\n\n";
+    data.results.forEach((r, i) => {
+      output += `[${i + 1}] ${r.title}\n`;
+      output += `    ${(r.content || "").slice(0, 400)}\n`;
+      output += `    🔗 ${r.url}\n\n`;
+    });
+  }
+
+  if (!output.trim()) {
+    throw new Error("Tavily returned no results");
+  }
+
+  return output.trim();
+}
+
+/* ─────────────────────────────────────────────
+   FALLBACK WEB SEARCH — DuckDuckGo (used only if Tavily fails)
+───────────────────────────────────────────── */
+async function duckduckgoSearchFallback(query) {
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -280,7 +317,6 @@ async function duckduckgoSearch(query) {
 
   let output = "";
 
-  // Step 1: Instant Answer API
   try {
     const iaRes = await fetch(
       `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
@@ -306,7 +342,6 @@ async function duckduckgoSearch(query) {
     console.warn("⚠️ DDG Instant Answer failed:", err.message);
   }
 
-  // Step 2: HTML scrape
   try {
     const htmlRes = await fetch(
       `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
@@ -345,6 +380,21 @@ async function duckduckgoSearch(query) {
 
   if (!output.trim()) return `No search results found for: "${query}". Try rephrasing.`;
   return output.trim();
+}
+
+/* ─────────────────────────────────────────────
+   WEB SEARCH WRAPPER — tries Tavily first, falls back to DDG
+───────────────────────────────────────────── */
+async function webSearch(query) {
+  try {
+    console.log(`🔎 Trying Tavily for: "${query}"`);
+    const result = await tavilySearch(query);
+    console.log(`✅ Tavily succeeded`);
+    return result;
+  } catch (err) {
+    console.warn(`⚠️ Tavily failed (${err.message}), falling back to DuckDuckGo`);
+    return await duckduckgoSearchFallback(query);
+  }
 }
 
 /* ─────────────────────────────────────────────
@@ -409,7 +459,6 @@ const stockPrice = tool(
         );
       }
 
-      // Fallback: Alpha Vantage
       if (process.env.ALPHA_VANTAGE_KEY) {
         console.log(`⚠️ Yahoo failed for ${symbol}, trying Alpha Vantage...`);
         try {
@@ -480,15 +529,13 @@ app.post("/chat", async (req, res) => {
   res.flushHeaders();
 
   try {
-    // ✅ Detect intent
     const intent = detectIntent(message);
     console.log(`🗺️  Intent: "${intent}"`);
 
-    // ✅ Execute tool directly — NO LangGraph, NO MemorySaver, NO history replay
     let toolResult = "";
 
     if (intent === "web_search") {
-      toolResult = await duckduckgoSearch(message);
+      toolResult = await webSearch(message);
 
     } else if (intent === "rag") {
       if (!rag.ready) {
@@ -538,7 +585,6 @@ app.post("/chat", async (req, res) => {
 
     console.log(`🔧 Tool result: ${String(toolResult).slice(0, 150)}`);
 
-    // ✅ Single LLM call — no history, no replay
     const prompt =
       `User asked: "${message}"\n\nTool returned:\n${toolResult}\n\n` +
       `Write a complete, helpful, well-formatted answer. Do NOT say you have limitations.`;
@@ -555,14 +601,12 @@ app.post("/chat", async (req, res) => {
 
     console.log(`🤖 ${reply.slice(0, 120)}`);
 
-    // ✅ Save to in-memory history
     if (!chatHistories[thread_id]) chatHistories[thread_id] = [];
     chatHistories[thread_id].push({ role: "user",      content: message });
     chatHistories[thread_id].push({ role: "assistant", content: reply   });
     if (chatHistories[thread_id].length > 20)
       chatHistories[thread_id] = chatHistories[thread_id].slice(-20);
 
-    // ✅ Stream response word by word
     const words = reply.split(" ");
     for (let i = 0; i < words.length; i++) {
       res.write((i === 0 ? "" : " ") + words[i]);
@@ -616,6 +660,7 @@ app.post("/clear-pdf", (_req, res) => {
         message: "PDF removed successfully"
     });
 });
+
 /* ─────────────────────────────────────────────
    START SERVER
 ───────────────────────────────────────────── */
