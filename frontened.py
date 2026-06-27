@@ -82,9 +82,12 @@ with st.sidebar:
 if rag_status.get("ready"):
     st.success(f"✅ Active: **{rag_status['filename']}**")
 
-    if st.button("🗑 Remove PDF", use_container_width=True):
-        requests.post(f"{BACKEND_URL}/clear-pdf")
-        st.rerun()
+    if st.button("❌ Cancel PDF", use_container_width=True):
+        try:
+            requests.post(f"{BACKEND_URL}/clear-pdf", timeout=5)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
 
 else:
     st.info("No PDF loaded yet.")
